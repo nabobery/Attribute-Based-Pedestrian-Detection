@@ -44,7 +44,7 @@ The application can detect a wide range of attributes, categorized as follows:
 
 **Project Workflow:**
 
-![Project Workflow](./assets/project_workflow.png)
+![Project Workflow](https://raw.githubusercontent.com/nabobery/Attribute-Based-Pedestrian-Detection/main/assets/project_workflow.png)
 
 
 **Getting Started:**
@@ -52,7 +52,7 @@ The application can detect a wide range of attributes, categorized as follows:
 To run the application locally, you'll need to set up the required dependencies and environment. Please refer to the project's directory specific README files for detailed instructions.
 
 **Example Output:**
-![Example Output of the YOLO Model](./assets/example_output.PNG)
+![Example Output of the YOLO Model](https://raw.githubusercontent.com/nabobery/Attribute-Based-Pedestrian-Detection/main/assets/example_output.PNG)
 
 **Future Enhancements:**
 
