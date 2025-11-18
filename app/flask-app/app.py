@@ -23,6 +23,72 @@ def is_inside(box1, box2):
     x1_, y1_, x2_, y2_ = box2
     return x1 >= x1_ and y1 >= y1_ and x2 <= x2_ and y2 <= y2_
 
+def draw_label_with_background(image, text, position, color=(255, 255, 255), bg_color=(0, 0, 0)):
+    """Draw text with background rectangle for better readability"""
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.6
+    font_thickness = 2
+
+    # Get text size
+    (text_width, text_height), baseline = cv2.getTextSize(
+        text, font, font_scale, font_thickness
+    )
+
+    x, y = position
+    padding = 5
+
+    # Draw background rectangle with some transparency
+    overlay = image.copy()
+    cv2.rectangle(
+        overlay,
+        (x - padding, y - text_height - padding),
+        (x + text_width + padding, y + baseline + padding),
+        bg_color,
+        -1  # Filled rectangle
+    )
+
+    # Blend the overlay with original image for transparency
+    alpha = 0.7  # Transparency factor
+    cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0, image)
+
+    # Draw white text on dark background
+    cv2.putText(
+        image, text, (x, y),
+        font, font_scale, color, font_thickness, cv2.LINE_AA
+    )
+
+    return image
+
+def get_optimal_label_position(box, label_index, total_labels, image_shape):
+    """Calculate optimal position for label to avoid overlap and going off-screen"""
+    x1, y1, x2, y2 = box
+    img_height, img_width = image_shape[:2]
+
+    label_height = 30
+    box_width = x2 - x1
+    box_height = y2 - y1
+
+    # Try positions in order of preference:
+    positions = [
+        # 1. Above the box (top-left)
+        (int(x1 + 5), int(y1 - 10 - (label_index * label_height))),
+        # 2. Inside top of box
+        (int(x1 + 5), int(y1 + 25 + (label_index * label_height))),
+        # 3. Right side of box
+        (int(x2 + 5), int(y1 + 25 + (label_index * label_height))),
+        # 4. Left side of box
+        (int(max(5, x1 - 180)), int(y1 + 25 + (label_index * label_height))),
+    ]
+
+    # Select first position that doesn't go off-screen
+    for pos in positions:
+        x, y = pos
+        if 10 < x < img_width - 200 and 20 < y < img_height - 10:
+            return pos
+
+    # Fallback to inside box
+    return (int(x1 + 5), int(y1 + 25 + (label_index * label_height)))
+
 
 
 @app.route('/')
@@ -174,21 +240,45 @@ def process_image1():
         # for k, v in box_to_attributes.items():
         #     print("box: ", k)
         #     print("attributes: ", v)
-        # draw the bounding box in box_to_attributes and put class and confidence text at the top right of the bounding box
+        # draw the bounding box in box_to_attributes and put class and confidence text with smart positioning
         for box, attributes in box_to_attributes.items():
             x1, y1, x2, y2 = box
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-            cv2.rectangle(image_cv, (x1, y1), (x2, y2), rgb_colors[req_id], 2)
+
             curr_classes = []
             for i, (attr, conf) in enumerate(attributes):
                 if attr != req_id:
                     curr_classes.append(attr)
             check = all(c in required_classes for c in curr_classes)
+
             if check:
+                # Draw main pedestrian bounding box with thicker line (green for match)
+                cv2.rectangle(image_cv, (x1, y1), (x2, y2), (0, 255, 0), 4)
+
+                # Draw semi-transparent overlay on matching pedestrian
+                overlay = image_cv.copy()
+                cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 0), -1)
+                cv2.addWeighted(overlay, 0.08, image_cv, 0.92, 0, image_cv)
+
+                # Draw labels with smart positioning and backgrounds
                 for i, (attr, conf) in enumerate(attributes):
-                    # print(attr, conf)
-                    # print(f"{names[attr]} {conf:.2f}")
-                    cv2.putText(image_cv, f"{names[attr]} {conf:.2f}", (x2-20, y1 + i * 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, rgb_colors[attr], 2)
+                    label_text = f"{names[attr]}: {conf:.2f}"
+                    position = get_optimal_label_position(
+                        (x1, y1, x2, y2), i, len(attributes), image_cv.shape
+                    )
+
+                    # Choose background color based on attribute type
+                    if attr == req_id:
+                        bg_color = (34, 139, 34)  # Green for gender
+                    else:
+                        bg_color = (0, 0, 0)  # Black for other attributes
+
+                    draw_label_with_background(
+                        image_cv, label_text, position, (255, 255, 255), bg_color
+                    )
+            else:
+                # Draw non-matching pedestrians with thinner red line
+                cv2.rectangle(image_cv, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
     # Convert the image back to PIL format
     image_with_boxes = Image.fromarray(cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB))
