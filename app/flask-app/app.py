@@ -13,10 +13,22 @@ import time
 
 app = Flask(__name__)
 
-CORS(app) 
+CORS(app)
+
+# Detect GPU availability
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+print(f"🚀 Using device: {DEVICE}")
 
 # Load YOLOv8 model
 model = YOLO('./models/best_100l.pt')
+if DEVICE == 'cuda':
+    model.to(DEVICE)
+    print("✅ Model loaded on GPU")
+else:
+    print("⚠️ Model loaded on CPU (GPU not available)")
+
+# Image cache for faster repeated requests
+image_cache = {}
 
 # function to see if a box1 is inside box2
 def is_inside(box1, box2):
@@ -90,6 +102,29 @@ def get_optimal_label_position(box, label_index, total_labels, image_shape):
     # Fallback to inside box
     return (int(x1 + 5), int(y1 + 25 + (label_index * label_height)))
 
+def optimize_image(image, max_size=1920):
+    """Resize image if too large while maintaining aspect ratio"""
+    width, height = image.size
+
+    if width > max_size or height > max_size:
+        if width > height:
+            new_width = max_size
+            new_height = int(height * (max_size / width))
+        else:
+            new_height = max_size
+            new_width = int(width * (max_size / height))
+
+        image = image.resize((new_width, new_height), Image.LANCZOS)
+        print(f"📐 Resized image from {width}x{height} to {new_width}x{new_height}")
+
+    return image
+
+def get_cache_key(image_data, attributes, confidence):
+    """Generate unique cache key for request"""
+    import hashlib
+    key_string = f"{image_data[:100]}{str(sorted(attributes.items()))}{confidence}"
+    return hashlib.md5(key_string.encode()).hexdigest()
+
 
 
 @app.route('/')
@@ -159,6 +194,14 @@ def process_image1():
     confidence_threshold = float(data.get('confidence', 0.25))
     iou_threshold = float(data.get('iou', 0.6))
 
+    # Check cache for this request
+    cache_key = get_cache_key(image_data, attributes, confidence_threshold)
+    if cache_key in image_cache:
+        print("✨ Cache hit! Returning cached result")
+        cached_result = image_cache[cache_key].copy()
+        cached_result['statistics']['from_cache'] = True
+        return jsonify(cached_result)
+
     #print(attributes)
     names = ['Backpack', 'Bag', 'Boots', 'Cap', 'Coat_Black', 'Coat_Blue', 'Coat_Brown', 'Coat_Green', 'Coat_Red', 'Coat_White', 'Coat_Yellow', 'Female_Pedestrian', 'Glasses', 'Male_Pedestrian', 'Shirt_Black', 'Shirt_Blue', 'Shirt_Brown', 'Shirt_Green', 'Shirt_Red', 'Shirt_White', 'Shirt_Yellow', 'Shorts_Black', 'Shorts_Blue', 'Shorts_Brown', 'Shorts_Green', 'Shorts_Red', 'Shorts_White', 'Shorts_Yellow', 'Skirt_Black', 'Skirt_Blue', 'Skirt_Brown', 'Skirt_Green', 'Skirt_Red', 'Skirt_White', 'Skirt_Yellow', 'T-shirt_Black', 'T-shirt_Blue', 'T-shirt_Brown', 'T-shirt_Green', 'T-shirt_Red', 'T-shirt_White', 'T-shirt_Yellow', 'Trousers_Black', 'Trousers_Blue', 'Trousers_Brown', 'Trousers_Green', 'Trousers_Red', 'Trousers_White', 'Trousers_Yellow', 'Umbrella', 'shoes']
     required_classes = []
@@ -193,15 +236,18 @@ def process_image1():
     rgb_colors = [(int(color[0]*255), int(color[1]*255), int(color[2]*255)) for color in palette]
 
     # Convert base64 image to a PIL image
-    image_data = base64.b64decode(image_data.split(',')[1])
-    image = Image.open(BytesIO(image_data))
+    image_data_decoded = base64.b64decode(image_data.split(',')[1])
+    image = Image.open(BytesIO(image_data_decoded))
+
+    # Optimize image size for faster processing
+    image = optimize_image(image, max_size=1920)
 
     # Convert PIL Image to OpenCV format
     image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
-    # Perform object detection on the image using YOLOv8 model with user-provided parameters
-    #results = model(image, imgsz=800, conf=confidence_threshold, iou=iou_threshold, device='cpu', classes=required_classes)
-    results = model(image, imgsz=800, conf=confidence_threshold, iou=iou_threshold, device='cpu')
+    # Perform object detection on the image using YOLOv8 model with user-provided parameters and auto-detected device
+    #results = model(image, imgsz=800, conf=confidence_threshold, iou=iou_threshold, device=DEVICE, classes=required_classes)
+    results = model(image, imgsz=800, conf=confidence_threshold, iou=iou_threshold, device=DEVICE)
 
     box_to_attributes = dict()
     for result in results:
@@ -327,13 +373,24 @@ def process_image1():
         'parameters': {
             'confidence_threshold': confidence_threshold,
             'iou_threshold': iou_threshold
-        }
+        },
+        'device': DEVICE,
+        'from_cache': False
     }
 
-    return jsonify({
+    response_data = {
         'prediction': img_str,
         'statistics': statistics
-    })
+    }
+
+    # Store in cache (limit to 50 entries)
+    if len(image_cache) >= 50:
+        # Remove oldest entry (first key)
+        image_cache.pop(next(iter(image_cache)))
+    image_cache[cache_key] = response_data.copy()
+    print(f"💾 Cached result (cache size: {len(image_cache)})")
+
+    return jsonify(response_data)
 
 
 @app.route('/process2', methods=['POST'])
