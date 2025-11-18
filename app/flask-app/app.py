@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import torch
 import seaborn as sns
+import time
 
 
 app = Flask(__name__)
@@ -148,9 +149,15 @@ def process_image():
 
 @app.route('/process1', methods=['POST'])
 def process_image1():
+    start_time = time.time()
+
     data = request.get_json()
     image_data = data.get('image')
     attributes = data.get('attributes')
+
+    # Get user-adjustable parameters (with defaults)
+    confidence_threshold = float(data.get('confidence', 0.25))
+    iou_threshold = float(data.get('iou', 0.6))
 
     #print(attributes)
     names = ['Backpack', 'Bag', 'Boots', 'Cap', 'Coat_Black', 'Coat_Blue', 'Coat_Brown', 'Coat_Green', 'Coat_Red', 'Coat_White', 'Coat_Yellow', 'Female_Pedestrian', 'Glasses', 'Male_Pedestrian', 'Shirt_Black', 'Shirt_Blue', 'Shirt_Brown', 'Shirt_Green', 'Shirt_Red', 'Shirt_White', 'Shirt_Yellow', 'Shorts_Black', 'Shorts_Blue', 'Shorts_Brown', 'Shorts_Green', 'Shorts_Red', 'Shorts_White', 'Shorts_Yellow', 'Skirt_Black', 'Skirt_Blue', 'Skirt_Brown', 'Skirt_Green', 'Skirt_Red', 'Skirt_White', 'Skirt_Yellow', 'T-shirt_Black', 'T-shirt_Blue', 'T-shirt_Brown', 'T-shirt_Green', 'T-shirt_Red', 'T-shirt_White', 'T-shirt_Yellow', 'Trousers_Black', 'Trousers_Blue', 'Trousers_Brown', 'Trousers_Green', 'Trousers_Red', 'Trousers_White', 'Trousers_Yellow', 'Umbrella', 'shoes']
@@ -192,9 +199,9 @@ def process_image1():
     # Convert PIL Image to OpenCV format
     image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
-    # Perform object detection on the image using YOLOv8 model
-    #results = model(image, imgsz=800, conf=0.25, iou = 0.6, device='cpu', classes=required_classes)
-    results = model(image, imgsz=800, conf=0.25, iou = 0.6, device='cpu')
+    # Perform object detection on the image using YOLOv8 model with user-provided parameters
+    #results = model(image, imgsz=800, conf=confidence_threshold, iou=iou_threshold, device='cpu', classes=required_classes)
+    results = model(image, imgsz=800, conf=confidence_threshold, iou=iou_threshold, device='cpu')
 
     box_to_attributes = dict()
     for result in results:
@@ -291,7 +298,42 @@ def process_image1():
     image_with_boxes.save(buffered, format="JPEG")
     img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-    return jsonify({'prediction': img_str})
+    # Calculate processing time
+    processing_time = round(time.time() - start_time, 2)
+
+    # Calculate statistics
+    matching_pedestrians = sum(1 for box, attrs in box_to_attributes.items()
+                               if all(c in required_classes for c, _ in attrs if c != req_id))
+
+    # Calculate average confidence for matching pedestrians
+    all_confidences = []
+    for box, attrs in box_to_attributes.items():
+        curr_classes = [attr for attr, conf in attrs if attr != req_id]
+        if all(c in required_classes for c in curr_classes):
+            all_confidences.extend([float(conf) for _, conf in attrs])
+
+    avg_confidence = round(np.mean(all_confidences) * 100, 1) if all_confidences else 0
+
+    # Prepare statistics
+    statistics = {
+        'total_pedestrians': len(box_to_attributes),
+        'matching_pedestrians': matching_pedestrians,
+        'avg_confidence': avg_confidence,
+        'processing_time': processing_time,
+        'image_dimensions': {
+            'width': image_cv.shape[1],
+            'height': image_cv.shape[0]
+        },
+        'parameters': {
+            'confidence_threshold': confidence_threshold,
+            'iou_threshold': iou_threshold
+        }
+    }
+
+    return jsonify({
+        'prediction': img_str,
+        'statistics': statistics
+    })
 
 
 @app.route('/process2', methods=['POST'])

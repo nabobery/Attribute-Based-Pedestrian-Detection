@@ -1,7 +1,23 @@
-import React, { useState, Fragment } from "react";
-import { DocumentArrowUpIcon, ChevronDownIcon, ChevronUpIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import React, { useState, Fragment, useEffect } from "react";
+import {
+  DocumentArrowUpIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  XMarkIcon,
+  MagnifyingGlassPlusIcon,
+  MagnifyingGlassMinusIcon,
+  ArrowDownTrayIcon,
+  ClockIcon,
+  TrashIcon,
+  BookmarkIcon
+} from "@heroicons/react/24/outline";
 import { useDropzone } from "react-dropzone";
 import { ClipLoader } from "react-spinners";
+import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
+import {
+  ReactCompareSlider,
+  ReactCompareSliderImage
+} from "react-compare-slider";
 import axios from "axios";
 
 import {
@@ -52,6 +68,58 @@ const attributeGroups = {
 };
 
 const Backend_API = "http://localhost:5000";
+
+// Predefined presets
+const defaultPresets = [
+  {
+    name: "Male Business Attire",
+    attributes: {
+      Gender: "Male",
+      "Upper Body Clothing": "Shirt",
+      "Upper Body Clothing Color": "White",
+      "Lower Body Clothing": "Trousers",
+      "Lower Body Clothing Color": "Black",
+      Footwear: "shoes",
+      Umbrella: "no",
+      Handbag: "no",
+      Backpack: "no",
+      Glasses: "no",
+      "Cap/Helmet": "no",
+    }
+  },
+  {
+    name: "Female with Backpack",
+    attributes: {
+      Gender: "Female",
+      "Upper Body Clothing": "T-shirt",
+      "Upper Body Clothing Color": "Blue",
+      "Lower Body Clothing": "Trousers",
+      "Lower Body Clothing Color": "Black",
+      Backpack: "yes",
+      Umbrella: "no",
+      Handbag: "no",
+      Footwear: "shoes",
+      Glasses: "no",
+      "Cap/Helmet": "no",
+    }
+  },
+  {
+    name: "Casual Male",
+    attributes: {
+      Gender: "Male",
+      "Upper Body Clothing": "T-shirt",
+      "Upper Body Clothing Color": "Black",
+      "Lower Body Clothing": "Shorts",
+      "Lower Body Clothing Color": "Blue",
+      Footwear: "shoes",
+      Umbrella: "no",
+      Handbag: "no",
+      Backpack: "no",
+      Glasses: "no",
+      "Cap/Helmet": "no",
+    }
+  }
+];
 
 // Collapsible Section Component
 function AttributeSection({ title, children, defaultOpen = false }) {
@@ -206,6 +274,298 @@ function ProcessingOverlay({ isProcessing }) {
   );
 }
 
+// Confidence Threshold Slider
+function ConfidenceSlider({ value, onChange }) {
+  return (
+    <div className="space-y-2 bg-blue-50 p-4 rounded-lg border border-blue-200">
+      <div className="flex justify-between items-center">
+        <label className="font-semibold text-gray-800">Detection Confidence</label>
+        <span className="text-sm bg-blue-600 text-white px-3 py-1 rounded-full font-bold">
+          {Math.round(value * 100)}%
+        </span>
+      </div>
+      <input
+        type="range"
+        min="10"
+        max="90"
+        step="5"
+        value={value * 100}
+        onChange={(e) => onChange(e.target.value / 100)}
+        className="w-full h-2 bg-blue-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+      />
+      <div className="flex justify-between text-xs text-gray-600">
+        <span>More Results (Lower Accuracy)</span>
+        <span>Fewer Results (Higher Accuracy)</span>
+      </div>
+    </div>
+  );
+}
+
+// Attribute Presets Component
+function AttributePresets({ onLoadPreset, currentAttributes, onSavePreset }) {
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [presetName, setPresetName] = useState("");
+  const [customPresets, setCustomPresets] = useState(() => {
+    const saved = localStorage.getItem('attributePresets');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const allPresets = [...defaultPresets, ...customPresets];
+
+  const savePreset = () => {
+    const newPreset = {
+      name: presetName,
+      attributes: currentAttributes
+    };
+    const updated = [...customPresets, newPreset];
+    setCustomPresets(updated);
+    localStorage.setItem('attributePresets', JSON.stringify(updated));
+    setShowSaveModal(false);
+    setPresetName("");
+  };
+
+  const deletePreset = (index) => {
+    const updated = customPresets.filter((_, i) => i !== index);
+    setCustomPresets(updated);
+    localStorage.setItem('attributePresets', JSON.stringify(updated));
+  };
+
+  return (
+    <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
+      <div className="flex justify-between items-center mb-3">
+        <h3 className="font-semibold text-gray-800 flex items-center">
+          <BookmarkIcon className="h-5 w-5 mr-2 text-purple-600" />
+          Quick Presets
+        </h3>
+        <button
+          onClick={() => setShowSaveModal(true)}
+          className="text-sm text-purple-600 hover:text-purple-800 font-medium"
+        >
+          + Save Current
+        </button>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {allPresets.map((preset, idx) => (
+          <div key={idx} className="relative group">
+            <button
+              onClick={() => onLoadPreset(preset.attributes)}
+              className="px-4 py-2 bg-purple-100 text-purple-700 rounded-full hover:bg-purple-200 text-sm font-medium transition-colors"
+            >
+              {preset.name}
+            </button>
+            {idx >= defaultPresets.length && (
+              <button
+                onClick={() => deletePreset(idx - defaultPresets.length)}
+                className="absolute -top-2 -right-2 p-1 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Delete preset"
+              >
+                <XMarkIcon className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Save Preset Modal */}
+      {showSaveModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full shadow-2xl">
+            <h3 className="text-xl font-bold mb-4">Save Attribute Preset</h3>
+            <input
+              type="text"
+              value={presetName}
+              onChange={(e) => setPresetName(e.target.value)}
+              placeholder="Enter preset name"
+              className="w-full border rounded p-2 mb-4"
+            />
+            <div className="flex justify-end space-x-2">
+              <button
+                onClick={() => setShowSaveModal(false)}
+                className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={savePreset}
+                disabled={!presetName.trim()}
+                className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-gray-300"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Statistics Dashboard Component
+function StatisticsDashboard({ statistics }) {
+  if (!statistics) return null;
+
+  return (
+    <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg p-6 border-2 border-indigo-200">
+      <h3 className="text-xl font-bold text-gray-800 mb-4">Detection Statistics</h3>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="bg-white rounded-lg p-4 text-center shadow">
+          <p className="text-3xl font-bold text-blue-600">{statistics.total_pedestrians}</p>
+          <p className="text-sm text-gray-600 mt-1">Total Detected</p>
+        </div>
+        <div className="bg-white rounded-lg p-4 text-center shadow">
+          <p className="text-3xl font-bold text-green-600">{statistics.matching_pedestrians}</p>
+          <p className="text-sm text-gray-600 mt-1">Matches Found</p>
+        </div>
+        <div className="bg-white rounded-lg p-4 text-center shadow">
+          <p className="text-3xl font-bold text-purple-600">{statistics.avg_confidence}%</p>
+          <p className="text-sm text-gray-600 mt-1">Avg Confidence</p>
+        </div>
+        <div className="bg-white rounded-lg p-4 text-center shadow">
+          <p className="text-3xl font-bold text-orange-600">{statistics.processing_time}s</p>
+          <p className="text-sm text-gray-600 mt-1">Processing Time</p>
+        </div>
+      </div>
+      <div className="mt-4 text-sm text-gray-600 bg-white rounded p-3">
+        <p><strong>Image:</strong> {statistics.image_dimensions?.width} × {statistics.image_dimensions?.height}px</p>
+        <p><strong>Confidence Threshold:</strong> {Math.round(statistics.parameters?.confidence_threshold * 100)}%</p>
+      </div>
+    </div>
+  );
+}
+
+// Interactive Results Viewer Component
+function InteractiveResultsViewer({ inputImage, outputImage, statistics }) {
+  const [viewMode, setViewMode] = useState('split'); // 'split', 'output', 'compare'
+
+  const downloadImage = () => {
+    const link = document.createElement('a');
+    link.href = outputImage;
+    link.download = `detection_result_${Date.now()}.jpg`;
+    link.click();
+  };
+
+  return (
+    <div className="bg-white rounded-lg shadow-lg p-6 border-2 border-gray-200">
+      {/* Toolbar */}
+      <div className="flex flex-wrap justify-between items-center mb-4 pb-4 border-b gap-2">
+        <div className="flex space-x-2">
+          <button
+            onClick={() => setViewMode('split')}
+            className={`px-4 py-2 rounded font-medium transition-colors ${
+              viewMode === 'split'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            Split View
+          </button>
+          <button
+            onClick={() => setViewMode('output')}
+            className={`px-4 py-2 rounded font-medium transition-colors ${
+              viewMode === 'output'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            Result Only
+          </button>
+          <button
+            onClick={() => setViewMode('compare')}
+            className={`px-4 py-2 rounded font-medium transition-colors ${
+              viewMode === 'compare'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            Slider Compare
+          </button>
+        </div>
+
+        <button
+          onClick={downloadImage}
+          className="flex items-center px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700 font-medium transition-colors"
+        >
+          <ArrowDownTrayIcon className="h-5 w-5 mr-2" />
+          Download
+        </button>
+      </div>
+
+      {/* Image Display */}
+      {viewMode === 'split' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div>
+            <h4 className="text-center font-semibold mb-2 text-gray-700">Original Image</h4>
+            <div className="border-2 border-gray-300 rounded-lg overflow-hidden">
+              <TransformWrapper>
+                <TransformComponent>
+                  <img src={inputImage} alt="Original" className="w-full" />
+                </TransformComponent>
+              </TransformWrapper>
+            </div>
+            <p className="text-center text-sm text-gray-500 mt-2">
+              <MagnifyingGlassPlusIcon className="inline h-4 w-4 mr-1" />
+              Scroll to zoom, drag to pan
+            </p>
+          </div>
+          <div>
+            <h4 className="text-center font-semibold mb-2 text-gray-700">Detection Result</h4>
+            <div className="border-2 border-green-300 rounded-lg overflow-hidden">
+              <TransformWrapper>
+                <TransformComponent>
+                  <img src={outputImage} alt="Detections" className="w-full" />
+                </TransformComponent>
+              </TransformWrapper>
+            </div>
+            <p className="text-center text-sm text-gray-500 mt-2">
+              <MagnifyingGlassPlusIcon className="inline h-4 w-4 mr-1" />
+              Scroll to zoom, drag to pan
+            </p>
+          </div>
+        </div>
+      )}
+
+      {viewMode === 'output' && (
+        <div>
+          <div className="border-2 border-green-300 rounded-lg overflow-hidden">
+            <TransformWrapper>
+              <TransformComponent>
+                <img src={outputImage} alt="Result" className="w-full" />
+              </TransformComponent>
+            </TransformWrapper>
+          </div>
+          <p className="text-center text-sm text-gray-500 mt-4">
+            <MagnifyingGlassPlusIcon className="inline h-4 w-4 mr-1" />
+            Scroll to zoom, drag to pan
+          </p>
+        </div>
+      )}
+
+      {viewMode === 'compare' && (
+        <div>
+          <div className="border-2 border-indigo-300 rounded-lg overflow-hidden">
+            <ReactCompareSlider
+              itemOne={<ReactCompareSliderImage src={inputImage} alt="Original" />}
+              itemTwo={<ReactCompareSliderImage src={outputImage} alt="Result" />}
+              style={{ height: '500px' }}
+            />
+          </div>
+          <p className="text-center text-sm text-gray-500 mt-4">
+            ← Drag the slider to compare original and detection result →
+          </p>
+        </div>
+      )}
+
+      {/* Statistics */}
+      {statistics && (
+        <div className="mt-6">
+          <StatisticsDashboard statistics={statistics} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MainPage() {
   // Initialize state
   const initialAttributes = Object.keys(attributes).reduce((obj, key) => {
@@ -219,16 +579,20 @@ function MainPage() {
   const [imagePreviewUrl, setImagePreviewUrl] = useState(null);
   const [predictedImage, setPredictedImage] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [confidence, setConfidence] = useState(0.25);
+  const [statistics, setStatistics] = useState(null);
 
   const handleImageUpload = (file) => {
     if (file) {
       setImage(file);
       setImagePreviewUrl(URL.createObjectURL(file));
       setPredictedImage(null); // Clear previous results
+      setStatistics(null);
     } else {
       setImage(null);
       setImagePreviewUrl(null);
       setPredictedImage(null);
+      setStatistics(null);
     }
   };
 
@@ -239,6 +603,10 @@ function MainPage() {
     });
   };
 
+  const handleLoadPreset = (presetAttributes) => {
+    setSelectedAttributes(presetAttributes);
+  };
+
   const handleSubmit = async () => {
     if (!image) {
       setOpen(true);
@@ -247,6 +615,7 @@ function MainPage() {
 
     setIsProcessing(true);
     setPredictedImage(null);
+    setStatistics(null);
 
     const reader = new FileReader();
     reader.readAsDataURL(image);
@@ -255,6 +624,8 @@ function MainPage() {
       const data = {
         image: base64Image,
         attributes: selectedAttributes,
+        confidence: confidence,
+        iou: 0.6
       };
       try {
         const response = await axios.post(Backend_API + "/process1", data, {
@@ -263,6 +634,7 @@ function MainPage() {
         setPredictedImage(
           "data:image/jpeg;base64," + response.data.prediction
         );
+        setStatistics(response.data.statistics);
       } catch (error) {
         console.error("Error processing image:", error);
         alert("Failed to process image. Please try again.");
@@ -282,13 +654,15 @@ function MainPage() {
     setImage(null);
     setImagePreviewUrl(null);
     setPredictedImage(null);
+    setStatistics(null);
+    setConfidence(0.25);
   };
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 w-full py-8 px-4">
       <ProcessingOverlay isProcessing={isProcessing} />
 
-      <div className="max-w-6xl w-full space-y-8 bg-white p-8 rounded-xl shadow-lg">
+      <div className="max-w-7xl w-full space-y-8 bg-white p-8 rounded-xl shadow-lg">
         {/* Header */}
         <div className="text-center border-b pb-6">
           <DocumentArrowUpIcon className="mx-auto h-14 w-14 text-indigo-600 mb-4" />
@@ -296,7 +670,7 @@ function MainPage() {
             Pedestrian Attribute Detection
           </h1>
           <p className="mt-2 text-gray-600">
-            Upload an image and select attributes to find matching pedestrians
+            Upload an image, adjust settings, and detect pedestrians with specific attributes
           </p>
         </div>
 
@@ -312,11 +686,26 @@ function MainPage() {
           />
         </div>
 
+        {/* Presets Section */}
+        <div>
+          <AttributePresets
+            onLoadPreset={handleLoadPreset}
+            currentAttributes={selectedAttributes}
+          />
+        </div>
+
         {/* Attribute Selection */}
         <div>
           <h2 className="text-xl font-bold text-gray-800 mb-4">
-            2. Select Attributes
+            2. Configure Detection
           </h2>
+
+          {/* Confidence Slider */}
+          <div className="mb-4">
+            <ConfidenceSlider value={confidence} onChange={setConfidence} />
+          </div>
+
+          {/* Attribute Sections */}
           <div className="space-y-2">
             {Object.entries(attributeGroups).map(([groupName, groupAttrs]) => (
               <AttributeSection
@@ -355,75 +744,28 @@ function MainPage() {
             disabled={!image || isProcessing}
             className="flex-1 py-3 px-6 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
           >
-            {isProcessing ? "Processing..." : "Detect Pedestrians"}
+            {isProcessing ? "Processing..." : "🔍 Detect Pedestrians"}
           </button>
           <button
             onClick={handleReset}
             disabled={isProcessing}
             className="px-6 py-3 border border-gray-300 rounded-md shadow-sm text-base font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors"
           >
-            Reset
+            🔄 Reset
           </button>
         </div>
 
         {/* Results Display */}
-        {(imagePreviewUrl || predictedImage) && (
+        {predictedImage && (
           <div>
             <h2 className="text-xl font-bold text-gray-800 mb-4">
               3. Results
             </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {imagePreviewUrl && (
-                <div className="flex flex-col">
-                  <div className="bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
-                    <img
-                      src={imagePreviewUrl}
-                      alt="Original"
-                      className="w-full h-auto object-contain rounded"
-                    />
-                  </div>
-                  <p className="mt-3 text-center font-semibold text-gray-700">
-                    Original Image
-                  </p>
-                </div>
-              )}
-              {predictedImage && (
-                <div className="flex flex-col">
-                  <div className="bg-gray-50 rounded-lg p-4 border-2 border-green-200">
-                    <img
-                      src={predictedImage}
-                      alt="Detection Result"
-                      className="w-full h-auto object-contain rounded"
-                    />
-                  </div>
-                  <p className="mt-3 text-center font-semibold text-gray-700">
-                    Detection Result
-                  </p>
-                  <div className="mt-2 text-center">
-                    <a
-                      href={predictedImage}
-                      download={`detection_result_${Date.now()}.jpg`}
-                      className="inline-flex items-center px-4 py-2 text-sm font-medium text-indigo-600 hover:text-indigo-800"
-                    >
-                      <svg
-                        className="w-4 h-4 mr-2"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                        />
-                      </svg>
-                      Download Result
-                    </a>
-                  </div>
-                </div>
-              )}
-            </div>
+            <InteractiveResultsViewer
+              inputImage={imagePreviewUrl}
+              outputImage={predictedImage}
+              statistics={statistics}
+            />
           </div>
         )}
 
@@ -459,7 +801,7 @@ function MainPage() {
 
       {/* Footer */}
       <div className="mt-8 text-center text-sm text-gray-500">
-        <p>Powered by YOLOv8 • Upload images to detect pedestrian attributes</p>
+        <p>Powered by YOLOv8 • Phase 2: Interactive Results • Adjustable Settings • Attribute Presets</p>
       </div>
     </div>
   );
