@@ -9,7 +9,10 @@ import {
   ArrowDownTrayIcon,
   ClockIcon,
   TrashIcon,
-  BookmarkIcon
+  BookmarkIcon,
+  DocumentTextIcon,
+  TableCellsIcon,
+  DocumentChartBarIcon
 } from "@heroicons/react/24/outline";
 import { useDropzone } from "react-dropzone";
 import { ClipLoader } from "react-spinners";
@@ -19,6 +22,8 @@ import {
   ReactCompareSliderImage
 } from "react-compare-slider";
 import axios from "axios";
+import jsPDF from 'jspdf';
+import * as XLSX from 'xlsx';
 
 import {
   Description,
@@ -67,7 +72,7 @@ const attributeGroups = {
   "Footwear": ["Footwear"],
 };
 
-const Backend_API = "http://localhost:5000";
+const Backend_API = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
 // Predefined presets
 const defaultPresets = [
@@ -429,7 +434,312 @@ function StatisticsDashboard({ statistics }) {
       <div className="mt-4 text-sm text-gray-600 bg-white rounded p-3">
         <p><strong>Image:</strong> {statistics.image_dimensions?.width} × {statistics.image_dimensions?.height}px</p>
         <p><strong>Confidence Threshold:</strong> {Math.round(statistics.parameters?.confidence_threshold * 100)}%</p>
+        {statistics.device && (
+          <p className="flex items-center mt-2">
+            <strong>Device:</strong>
+            {statistics.device === 'cuda' && <span className="ml-2 text-green-600">🚀 GPU Accelerated</span>}
+            {statistics.device === 'cpu' && <span className="ml-2 text-blue-600">💻 CPU Processing</span>}
+            {statistics.from_cache && <span className="ml-2 text-yellow-600">⚡ From Cache</span>}
+          </p>
+        )}
       </div>
+    </div>
+  );
+}
+
+// Export Results Component
+function ExportResults({ detections, statistics, inputImage, outputImage, selectedAttributes }) {
+  const downloadBlob = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportJSON = () => {
+    const data = {
+      timestamp: new Date().toISOString(),
+      attributes: selectedAttributes,
+      statistics: statistics,
+      metadata: {
+        exported_by: "Pedestrian Attribute Detection System",
+        version: "3.0"
+      }
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    downloadBlob(blob, `detection_results_${Date.now()}.json`);
+  };
+
+  const exportCSV = () => {
+    // Create CSV header
+    let csv = "Metric,Value\n";
+    csv += `Timestamp,${new Date().toISOString()}\n`;
+    csv += `Total Pedestrians,${statistics.total_pedestrians}\n`;
+    csv += `Matching Pedestrians,${statistics.matching_pedestrians}\n`;
+    csv += `Average Confidence,${statistics.avg_confidence}%\n`;
+    csv += `Processing Time,${statistics.processing_time}s\n`;
+    csv += `Image Width,${statistics.image_dimensions?.width}px\n`;
+    csv += `Image Height,${statistics.image_dimensions?.height}px\n`;
+    csv += `Confidence Threshold,${Math.round(statistics.parameters?.confidence_threshold * 100)}%\n`;
+    csv += `IOU Threshold,${statistics.parameters?.iou_threshold}\n`;
+
+    // Add attributes
+    csv += "\nAttribute,Value\n";
+    Object.entries(selectedAttributes).forEach(([key, value]) => {
+      csv += `${key},${value}\n`;
+    });
+
+    const blob = new Blob([csv], { type: 'text/csv' });
+    downloadBlob(blob, `detection_results_${Date.now()}.csv`);
+  };
+
+  const exportExcel = () => {
+    // Create statistics worksheet
+    const statsData = [
+      ["Metric", "Value"],
+      ["Timestamp", new Date().toISOString()],
+      ["Total Pedestrians", statistics.total_pedestrians],
+      ["Matching Pedestrians", statistics.matching_pedestrians],
+      ["Average Confidence", `${statistics.avg_confidence}%`],
+      ["Processing Time", `${statistics.processing_time}s`],
+      ["Image Width", `${statistics.image_dimensions?.width}px`],
+      ["Image Height", `${statistics.image_dimensions?.height}px`],
+      ["Confidence Threshold", `${Math.round(statistics.parameters?.confidence_threshold * 100)}%`],
+      ["IOU Threshold", statistics.parameters?.iou_threshold]
+    ];
+
+    // Create attributes worksheet
+    const attrsData = [
+      ["Attribute", "Value"],
+      ...Object.entries(selectedAttributes).map(([key, value]) => [key, value])
+    ];
+
+    // Create workbook
+    const wb = XLSX.utils.book_new();
+    const ws1 = XLSX.utils.aoa_to_sheet(statsData);
+    const ws2 = XLSX.utils.aoa_to_sheet(attrsData);
+
+    XLSX.utils.book_append_sheet(wb, ws1, "Statistics");
+    XLSX.utils.book_append_sheet(wb, ws2, "Attributes");
+
+    // Write file
+    XLSX.writeFile(wb, `detection_results_${Date.now()}.xlsx`);
+  };
+
+  const exportPDF = () => {
+    const pdf = new jsPDF();
+    const pageWidth = pdf.internal.pageSize.getWidth();
+
+    // Title
+    pdf.setFontSize(20);
+    pdf.setTextColor(79, 70, 229); // Indigo
+    pdf.text("Pedestrian Detection Report", pageWidth / 2, 20, { align: 'center' });
+
+    // Timestamp
+    pdf.setFontSize(10);
+    pdf.setTextColor(100, 100, 100);
+    pdf.text(`Generated: ${new Date().toLocaleString()}`, pageWidth / 2, 28, { align: 'center' });
+
+    // Statistics Section
+    pdf.setFontSize(14);
+    pdf.setTextColor(0, 0, 0);
+    pdf.text("Detection Statistics", 14, 40);
+
+    pdf.setFontSize(11);
+    let yPos = 50;
+    const stats = [
+      [`Total Pedestrians: ${statistics.total_pedestrians}`],
+      [`Matching Pedestrians: ${statistics.matching_pedestrians}`],
+      [`Average Confidence: ${statistics.avg_confidence}%`],
+      [`Processing Time: ${statistics.processing_time}s`],
+      [`Image Size: ${statistics.image_dimensions?.width} × ${statistics.image_dimensions?.height}px`],
+      [`Confidence Threshold: ${Math.round(statistics.parameters?.confidence_threshold * 100)}%`]
+    ];
+
+    stats.forEach(stat => {
+      pdf.text(stat[0], 20, yPos);
+      yPos += 8;
+    });
+
+    // Attributes Section
+    yPos += 10;
+    pdf.setFontSize(14);
+    pdf.text("Search Attributes", 14, yPos);
+    yPos += 10;
+
+    pdf.setFontSize(11);
+    Object.entries(selectedAttributes).forEach(([key, value]) => {
+      pdf.text(`${key}: ${value}`, 20, yPos);
+      yPos += 8;
+
+      // Add new page if needed
+      if (yPos > 270) {
+        pdf.addPage();
+        yPos = 20;
+      }
+    });
+
+    // Add output image if available
+    if (outputImage) {
+      pdf.addPage();
+      pdf.setFontSize(14);
+      pdf.text("Detection Result", 14, 20);
+
+      try {
+        // Add image (scaled to fit page)
+        const imgWidth = 180;
+        const imgHeight = 120;
+        pdf.addImage(outputImage, 'JPEG', 15, 30, imgWidth, imgHeight);
+      } catch (error) {
+        console.error("Could not add image to PDF:", error);
+      }
+    }
+
+    // Save PDF
+    pdf.save(`detection_report_${Date.now()}.pdf`);
+  };
+
+  return (
+    <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+      <h3 className="font-semibold text-gray-800 mb-3 flex items-center">
+        <ArrowDownTrayIcon className="h-5 w-5 mr-2 text-green-600" />
+        Export Results
+      </h3>
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={exportJSON}
+          className="flex items-center px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm font-medium"
+        >
+          <DocumentTextIcon className="h-4 w-4 mr-2" />
+          JSON
+        </button>
+        <button
+          onClick={exportCSV}
+          className="flex items-center px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors text-sm font-medium"
+        >
+          <TableCellsIcon className="h-4 w-4 mr-2" />
+          CSV
+        </button>
+        <button
+          onClick={exportExcel}
+          className="flex items-center px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors text-sm font-medium"
+        >
+          <TableCellsIcon className="h-4 w-4 mr-2" />
+          Excel
+        </button>
+        <button
+          onClick={exportPDF}
+          className="flex items-center px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors text-sm font-medium"
+        >
+          <DocumentChartBarIcon className="h-4 w-4 mr-2" />
+          PDF
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Search History Component
+function SearchHistory({ onLoadHistory }) {
+  const [history, setHistory] = useState(() => {
+    const saved = localStorage.getItem('searchHistory');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [showHistory, setShowHistory] = useState(false);
+
+  const saveToHistory = (entry) => {
+    const updated = [entry, ...history].slice(0, 20); // Keep last 20
+    setHistory(updated);
+    localStorage.setItem('searchHistory', JSON.stringify(updated));
+  };
+
+  const deleteEntry = (id) => {
+    const updated = history.filter(h => h.id !== id);
+    setHistory(updated);
+    localStorage.setItem('searchHistory', JSON.stringify(updated));
+  };
+
+  const clearHistory = () => {
+    if (window.confirm('Clear all search history?')) {
+      setHistory([]);
+      localStorage.removeItem('searchHistory');
+    }
+  };
+
+  // Expose saveToHistory via useEffect for parent component
+  useEffect(() => {
+    window.saveSearchToHistory = saveToHistory;
+  }, [history]);
+
+  if (history.length === 0) return null;
+
+  return (
+    <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
+      <div className="flex justify-between items-center mb-3">
+        <h3 className="font-semibold text-gray-800 flex items-center">
+          <ClockIcon className="h-5 w-5 mr-2 text-yellow-600" />
+          Search History ({history.length})
+        </h3>
+        <div className="flex space-x-2">
+          <button
+            onClick={() => setShowHistory(!showHistory)}
+            className="text-sm text-yellow-600 hover:text-yellow-800 font-medium"
+          >
+            {showHistory ? 'Hide' : 'Show'}
+          </button>
+          {history.length > 0 && (
+            <button
+              onClick={clearHistory}
+              className="text-sm text-red-600 hover:text-red-800 font-medium"
+            >
+              Clear All
+            </button>
+          )}
+        </div>
+      </div>
+
+      {showHistory && (
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 mt-4">
+          {history.map(entry => (
+            <div
+              key={entry.id}
+              className="bg-white rounded-lg border border-gray-200 overflow-hidden shadow hover:shadow-lg transition-shadow cursor-pointer group"
+            >
+              <div className="relative" onClick={() => onLoadHistory(entry)}>
+                <img
+                  src={entry.resultUrl}
+                  alt="Search result"
+                  className="w-full h-32 object-cover"
+                />
+                <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-20 transition-all" />
+                <div className="absolute top-2 right-2 bg-green-500 text-white text-xs px-2 py-1 rounded-full font-bold">
+                  {entry.matchCount}
+                </div>
+              </div>
+              <div className="p-2">
+                <p className="text-xs text-gray-600 truncate">
+                  {new Date(entry.timestamp).toLocaleDateString()}
+                </p>
+                <p className="text-xs text-gray-500 truncate">
+                  {entry.statistics.processing_time}s
+                </p>
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteEntry(entry.id);
+                }}
+                className="w-full py-1 bg-red-50 text-red-600 text-xs hover:bg-red-100 transition-colors flex items-center justify-center"
+              >
+                <TrashIcon className="h-3 w-3 mr-1" />
+                Delete
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -631,10 +941,23 @@ function MainPage() {
         const response = await axios.post(Backend_API + "/process1", data, {
           responseType: "json",
         });
-        setPredictedImage(
-          "data:image/jpeg;base64," + response.data.prediction
-        );
+        const resultImage = "data:image/jpeg;base64," + response.data.prediction;
+        setPredictedImage(resultImage);
         setStatistics(response.data.statistics);
+
+        // Save to search history
+        if (window.saveSearchToHistory) {
+          const historyEntry = {
+            id: Date.now(),
+            timestamp: new Date().toISOString(),
+            imageUrl: base64Image,
+            resultUrl: resultImage,
+            attributes: selectedAttributes,
+            statistics: response.data.statistics,
+            matchCount: response.data.statistics.matching_pedestrians
+          };
+          window.saveSearchToHistory(historyEntry);
+        }
       } catch (error) {
         console.error("Error processing image:", error);
         alert("Failed to process image. Please try again.");
@@ -647,6 +970,24 @@ function MainPage() {
       setIsProcessing(false);
       alert("Failed to read image file. Please try again.");
     };
+  };
+
+  const handleLoadHistory = (entry) => {
+    // Load image from history
+    const file = new File([entry.imageUrl], "history_image.jpg", { type: "image/jpeg" });
+    setImage(file);
+    setImagePreviewUrl(entry.imageUrl);
+    setSelectedAttributes(entry.attributes);
+    setPredictedImage(entry.resultUrl);
+    setStatistics(entry.statistics);
+
+    // Scroll to results
+    setTimeout(() => {
+      const resultsElement = document.getElementById('results-section');
+      if (resultsElement) {
+        resultsElement.scrollIntoView({ behavior: 'smooth' });
+      }
+    }, 100);
   };
 
   const handleReset = () => {
@@ -692,6 +1033,11 @@ function MainPage() {
             onLoadPreset={handleLoadPreset}
             currentAttributes={selectedAttributes}
           />
+        </div>
+
+        {/* Search History Section */}
+        <div>
+          <SearchHistory onLoadHistory={handleLoadHistory} />
         </div>
 
         {/* Attribute Selection */}
@@ -757,10 +1103,22 @@ function MainPage() {
 
         {/* Results Display */}
         {predictedImage && (
-          <div>
+          <div id="results-section">
             <h2 className="text-xl font-bold text-gray-800 mb-4">
               3. Results
             </h2>
+
+            {/* Export Results */}
+            <div className="mb-4">
+              <ExportResults
+                statistics={statistics}
+                inputImage={imagePreviewUrl}
+                outputImage={predictedImage}
+                selectedAttributes={selectedAttributes}
+              />
+            </div>
+
+            {/* Interactive Viewer */}
             <InteractiveResultsViewer
               inputImage={imagePreviewUrl}
               outputImage={predictedImage}
@@ -801,7 +1159,7 @@ function MainPage() {
 
       {/* Footer */}
       <div className="mt-8 text-center text-sm text-gray-500">
-        <p>Powered by YOLOv8 • Phase 2: Interactive Results • Adjustable Settings • Attribute Presets</p>
+        <p>Powered by YOLOv8 • Phase 3: Export Formats • Search History • GPU Acceleration • Production Ready</p>
       </div>
     </div>
   );

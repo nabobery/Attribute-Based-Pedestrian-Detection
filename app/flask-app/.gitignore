@@ -3,3 +3,12 @@ models/*.pt
 __pycache__/
 *.pyc
 *.pyo
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Logs
+*.log
+app.log

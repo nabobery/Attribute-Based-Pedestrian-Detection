@@ -9,18 +9,50 @@ import numpy as np
 import torch
 import seaborn as sns
 import time
+import os
+from dotenv import load_dotenv
 
+# Load environment variables
+load_dotenv()
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 
-CORS(app)
+# CORS Configuration
+cors_origins = os.getenv('CORS_ORIGINS', '*')
+if cors_origins == '*':
+    CORS(app)
+    print("⚠️ CORS: Allowing all origins (development mode)")
+else:
+    origins_list = [origin.strip() for origin in cors_origins.split(',')]
+    CORS(app, resources={r"/*": {"origins": origins_list}})
+    print(f"✅ CORS: Restricted to {origins_list}")
+
+# Model Configuration
+MODEL_PATH = os.getenv('MODEL_PATH', './models/best_100l.pt')
+DEVICE_CONFIG = os.getenv('MODEL_DEVICE', 'auto')
+IMAGE_SIZE = int(os.getenv('IMAGE_SIZE', '800'))
+DEFAULT_CONF = float(os.getenv('CONFIDENCE_THRESHOLD', '0.25'))
+DEFAULT_IOU = float(os.getenv('IOU_THRESHOLD', '0.6'))
+MAX_IMAGE_SIZE = int(os.getenv('MAX_IMAGE_SIZE_PX', '1920'))
+ENABLE_CACHE = os.getenv('ENABLE_CACHE', 'True').lower() == 'true'
+CACHE_SIZE = int(os.getenv('CACHE_SIZE', '50'))
 
 # Detect GPU availability
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+if DEVICE_CONFIG == 'auto':
+    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+else:
+    DEVICE = DEVICE_CONFIG
+
 print(f"🚀 Using device: {DEVICE}")
 
 # Load YOLOv8 model
-model = YOLO('./models/best_100l.pt')
+if not os.path.exists(MODEL_PATH):
+    print(f"❌ ERROR: Model file not found at {MODEL_PATH}")
+    print("Please download the model or update MODEL_PATH in .env")
+    exit(1)
+
+model = YOLO(MODEL_PATH)
 if DEVICE == 'cuda':
     model.to(DEVICE)
     print("✅ Model loaded on GPU")
@@ -29,6 +61,7 @@ else:
 
 # Image cache for faster repeated requests
 image_cache = {}
+print(f"💾 Cache: {'Enabled' if ENABLE_CACHE else 'Disabled'} (max {CACHE_SIZE} items)")
 
 # function to see if a box1 is inside box2
 def is_inside(box1, box2):
@@ -102,17 +135,17 @@ def get_optimal_label_position(box, label_index, total_labels, image_shape):
     # Fallback to inside box
     return (int(x1 + 5), int(y1 + 25 + (label_index * label_height)))
 
-def optimize_image(image, max_size=1920):
+def optimize_image(image):
     """Resize image if too large while maintaining aspect ratio"""
     width, height = image.size
 
-    if width > max_size or height > max_size:
+    if width > MAX_IMAGE_SIZE or height > MAX_IMAGE_SIZE:
         if width > height:
-            new_width = max_size
-            new_height = int(height * (max_size / width))
+            new_width = MAX_IMAGE_SIZE
+            new_height = int(height * (MAX_IMAGE_SIZE / width))
         else:
-            new_height = max_size
-            new_width = int(width * (max_size / height))
+            new_height = MAX_IMAGE_SIZE
+            new_width = int(width * (MAX_IMAGE_SIZE / height))
 
         image = image.resize((new_width, new_height), Image.LANCZOS)
         print(f"📐 Resized image from {width}x{height} to {new_width}x{new_height}")
@@ -194,13 +227,16 @@ def process_image1():
     confidence_threshold = float(data.get('confidence', 0.25))
     iou_threshold = float(data.get('iou', 0.6))
 
-    # Check cache for this request
-    cache_key = get_cache_key(image_data, attributes, confidence_threshold)
-    if cache_key in image_cache:
-        print("✨ Cache hit! Returning cached result")
-        cached_result = image_cache[cache_key].copy()
-        cached_result['statistics']['from_cache'] = True
-        return jsonify(cached_result)
+    # Check cache for this request (if caching is enabled)
+    if ENABLE_CACHE:
+        cache_key = get_cache_key(image_data, attributes, confidence_threshold)
+        if cache_key in image_cache:
+            print("✨ Cache hit! Returning cached result")
+            cached_result = image_cache[cache_key].copy()
+            cached_result['statistics']['from_cache'] = True
+            return jsonify(cached_result)
+    else:
+        cache_key = None
 
     #print(attributes)
     names = ['Backpack', 'Bag', 'Boots', 'Cap', 'Coat_Black', 'Coat_Blue', 'Coat_Brown', 'Coat_Green', 'Coat_Red', 'Coat_White', 'Coat_Yellow', 'Female_Pedestrian', 'Glasses', 'Male_Pedestrian', 'Shirt_Black', 'Shirt_Blue', 'Shirt_Brown', 'Shirt_Green', 'Shirt_Red', 'Shirt_White', 'Shirt_Yellow', 'Shorts_Black', 'Shorts_Blue', 'Shorts_Brown', 'Shorts_Green', 'Shorts_Red', 'Shorts_White', 'Shorts_Yellow', 'Skirt_Black', 'Skirt_Blue', 'Skirt_Brown', 'Skirt_Green', 'Skirt_Red', 'Skirt_White', 'Skirt_Yellow', 'T-shirt_Black', 'T-shirt_Blue', 'T-shirt_Brown', 'T-shirt_Green', 'T-shirt_Red', 'T-shirt_White', 'T-shirt_Yellow', 'Trousers_Black', 'Trousers_Blue', 'Trousers_Brown', 'Trousers_Green', 'Trousers_Red', 'Trousers_White', 'Trousers_Yellow', 'Umbrella', 'shoes']
@@ -240,14 +276,14 @@ def process_image1():
     image = Image.open(BytesIO(image_data_decoded))
 
     # Optimize image size for faster processing
-    image = optimize_image(image, max_size=1920)
+    image = optimize_image(image)
 
     # Convert PIL Image to OpenCV format
     image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
     # Perform object detection on the image using YOLOv8 model with user-provided parameters and auto-detected device
-    #results = model(image, imgsz=800, conf=confidence_threshold, iou=iou_threshold, device=DEVICE, classes=required_classes)
-    results = model(image, imgsz=800, conf=confidence_threshold, iou=iou_threshold, device=DEVICE)
+    #results = model(image, imgsz=IMAGE_SIZE, conf=confidence_threshold, iou=iou_threshold, device=DEVICE, classes=required_classes)
+    results = model(image, imgsz=IMAGE_SIZE, conf=confidence_threshold, iou=iou_threshold, device=DEVICE)
 
     box_to_attributes = dict()
     for result in results:
@@ -383,12 +419,13 @@ def process_image1():
         'statistics': statistics
     }
 
-    # Store in cache (limit to 50 entries)
-    if len(image_cache) >= 50:
-        # Remove oldest entry (first key)
-        image_cache.pop(next(iter(image_cache)))
-    image_cache[cache_key] = response_data.copy()
-    print(f"💾 Cached result (cache size: {len(image_cache)})")
+    # Store in cache (if caching is enabled)
+    if ENABLE_CACHE and cache_key:
+        if len(image_cache) >= CACHE_SIZE:
+            # Remove oldest entry (LRU eviction)
+            image_cache.pop(next(iter(image_cache)))
+        image_cache[cache_key] = response_data.copy()
+        print(f"💾 Cached result (cache size: {len(image_cache)}/{CACHE_SIZE})")
 
     return jsonify(response_data)
 
