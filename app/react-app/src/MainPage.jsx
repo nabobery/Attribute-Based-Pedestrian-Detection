@@ -1,4 +1,4 @@
-import React, { useState, Fragment, useEffect } from "react";
+import React, { useState, Fragment, useEffect, useRef, useCallback } from "react";
 import {
   DocumentArrowUpIcon,
   ChevronDownIcon,
@@ -12,7 +12,11 @@ import {
   BookmarkIcon,
   DocumentTextIcon,
   TableCellsIcon,
-  DocumentChartBarIcon
+  DocumentChartBarIcon,
+  VideoCameraIcon,
+  StopIcon,
+  CameraIcon,
+  PlayIcon
 } from "@heroicons/react/24/outline";
 import { useDropzone } from "react-dropzone";
 import { ClipLoader } from "react-spinners";
@@ -24,6 +28,7 @@ import {
 import axios from "axios";
 import jsPDF from 'jspdf';
 import * as XLSX from 'xlsx';
+import Webcam from 'react-webcam';
 
 import {
   Description,
@@ -744,6 +749,286 @@ function SearchHistory({ onLoadHistory }) {
   );
 }
 
+// Live Webcam Detection Component
+function WebcamDetection({ selectedAttributes, confidence }) {
+  const webcamRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [isActive, setIsActive] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [detectionStats, setDetectionStats] = useState(null);
+  const [fps, setFps] = useState(0);
+  const [errorMessage, setErrorMessage] = useState(null);
+  const intervalRef = useRef(null);
+  const fpsIntervalRef = useRef(null);
+  const frameCountRef = useRef(0);
+  const lastDetectionRef = useRef(null);
+
+  const videoConstraints = {
+    width: 640,
+    height: 480,
+    facingMode: "user"
+  };
+
+  // Capture and process frame
+  const captureFrame = useCallback(async () => {
+    if (!webcamRef.current || isProcessing) return;
+
+    const imageSrc = webcamRef.current.getScreenshot();
+    if (!imageSrc) return;
+
+    setIsProcessing(true);
+    frameCountRef.current += 1;
+
+    try {
+      const data = {
+        image: imageSrc,
+        attributes: selectedAttributes,
+        confidence: confidence,
+        iou: 0.6
+      };
+
+      const response = await axios.post(Backend_API + "/process1", data, {
+        responseType: "json",
+        timeout: 10000 // 10 second timeout
+      });
+
+      // Store detection result
+      lastDetectionRef.current = {
+        resultImage: "data:image/jpeg;base64," + response.data.prediction,
+        statistics: response.data.statistics
+      };
+
+      setDetectionStats(response.data.statistics);
+
+      // Draw detection on canvas
+      if (canvasRef.current && response.data.prediction) {
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        const img = new Image();
+
+        img.onload = () => {
+          canvas.width = 640;
+          canvas.height = 480;
+          ctx.drawImage(img, 0, 0, 640, 480);
+        };
+
+        img.src = "data:image/jpeg;base64," + response.data.prediction;
+      }
+    } catch (error) {
+      console.error("Error processing frame:", error);
+      if (error.code === 'ECONNABORTED') {
+        setErrorMessage("Detection timeout. Please try again.");
+      } else {
+        setErrorMessage("Failed to process frame. Backend may be unavailable.");
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [selectedAttributes, confidence, isProcessing]);
+
+  // Start webcam detection
+  const startDetection = useCallback(() => {
+    setIsActive(true);
+    setErrorMessage(null);
+    frameCountRef.current = 0;
+
+    // Capture frame every 2 seconds (to avoid overwhelming backend)
+    intervalRef.current = setInterval(() => {
+      captureFrame();
+    }, 2000);
+
+    // Calculate FPS every second
+    fpsIntervalRef.current = setInterval(() => {
+      setFps(frameCountRef.current);
+      frameCountRef.current = 0;
+    }, 1000);
+  }, [captureFrame]);
+
+  // Stop webcam detection
+  const stopDetection = useCallback(() => {
+    setIsActive(false);
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+    if (fpsIntervalRef.current) {
+      clearInterval(fpsIntervalRef.current);
+      fpsIntervalRef.current = null;
+    }
+    setDetectionStats(null);
+    setFps(0);
+    frameCountRef.current = 0;
+
+    // Clear canvas
+    if (canvasRef.current) {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  }, []);
+
+  // Capture current detection as image
+  const captureSnapshot = useCallback(() => {
+    if (!lastDetectionRef.current) {
+      alert("No detection available to capture");
+      return;
+    }
+
+    // Save to search history
+    if (window.saveSearchToHistory && lastDetectionRef.current) {
+      const historyEntry = {
+        id: Date.now(),
+        timestamp: new Date().toISOString(),
+        imageUrl: webcamRef.current.getScreenshot(),
+        resultUrl: lastDetectionRef.current.resultImage,
+        attributes: selectedAttributes,
+        statistics: lastDetectionRef.current.statistics,
+        matchCount: lastDetectionRef.current.statistics.matching_pedestrians
+      };
+      window.saveSearchToHistory(historyEntry);
+      alert("Snapshot saved to history!");
+    }
+  }, [selectedAttributes]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (fpsIntervalRef.current) clearInterval(fpsIntervalRef.current);
+    };
+  }, []);
+
+  return (
+    <div className="bg-gradient-to-r from-purple-50 to-pink-50 p-6 rounded-lg border-2 border-purple-200">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-xl font-bold text-gray-800 flex items-center">
+          <VideoCameraIcon className="h-6 w-6 mr-2 text-purple-600" />
+          Live Webcam Detection
+        </h3>
+        <div className="flex items-center space-x-2">
+          {isActive && (
+            <span className="flex items-center text-sm font-medium text-green-600">
+              <span className="animate-pulse mr-2">🔴</span>
+              LIVE
+            </span>
+          )}
+        </div>
+      </div>
+
+      {errorMessage && (
+        <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+          <p className="text-sm">{errorMessage}</p>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Webcam Feed */}
+        <div>
+          <h4 className="text-sm font-semibold text-gray-700 mb-2">Camera Feed</h4>
+          <div className="relative border-4 border-purple-300 rounded-lg overflow-hidden bg-black">
+            <Webcam
+              ref={webcamRef}
+              audio={false}
+              screenshotFormat="image/jpeg"
+              videoConstraints={videoConstraints}
+              className="w-full"
+              mirrored={true}
+            />
+            {isProcessing && (
+              <div className="absolute top-2 right-2 bg-yellow-500 text-white px-3 py-1 rounded-full text-xs font-bold">
+                Processing...
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Detection Overlay */}
+        <div>
+          <h4 className="text-sm font-semibold text-gray-700 mb-2">Detection Result</h4>
+          <div className="relative border-4 border-green-300 rounded-lg overflow-hidden bg-gray-900">
+            <canvas
+              ref={canvasRef}
+              width={640}
+              height={480}
+              className="w-full"
+            />
+            {!isActive && (
+              <div className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-80">
+                <p className="text-white text-center">
+                  Click "Start Detection" to begin
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Controls */}
+      <div className="mt-6 flex flex-wrap gap-3">
+        {!isActive ? (
+          <button
+            onClick={startDetection}
+            className="flex items-center px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium transition-colors shadow-md"
+          >
+            <PlayIcon className="h-5 w-5 mr-2" />
+            Start Detection
+          </button>
+        ) : (
+          <button
+            onClick={stopDetection}
+            className="flex items-center px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium transition-colors shadow-md"
+          >
+            <StopIcon className="h-5 w-5 mr-2" />
+            Stop Detection
+          </button>
+        )}
+
+        {isActive && (
+          <button
+            onClick={captureSnapshot}
+            disabled={!lastDetectionRef.current}
+            className="flex items-center px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium transition-colors shadow-md disabled:bg-gray-400"
+          >
+            <CameraIcon className="h-5 w-5 mr-2" />
+            Capture Snapshot
+          </button>
+        )}
+      </div>
+
+      {/* Statistics */}
+      {detectionStats && isActive && (
+        <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-white rounded-lg p-3 text-center shadow">
+            <p className="text-2xl font-bold text-blue-600">{detectionStats.total_pedestrians}</p>
+            <p className="text-xs text-gray-600 mt-1">Total Detected</p>
+          </div>
+          <div className="bg-white rounded-lg p-3 text-center shadow">
+            <p className="text-2xl font-bold text-green-600">{detectionStats.matching_pedestrians}</p>
+            <p className="text-xs text-gray-600 mt-1">Matches</p>
+          </div>
+          <div className="bg-white rounded-lg p-3 text-center shadow">
+            <p className="text-2xl font-bold text-purple-600">{detectionStats.avg_confidence}%</p>
+            <p className="text-xs text-gray-600 mt-1">Confidence</p>
+          </div>
+          <div className="bg-white rounded-lg p-3 text-center shadow">
+            <p className="text-2xl font-bold text-orange-600">{detectionStats.processing_time}s</p>
+            <p className="text-xs text-gray-600 mt-1">Process Time</p>
+          </div>
+        </div>
+      )}
+
+      {/* Info */}
+      <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+        <p className="text-sm text-blue-800">
+          <strong>ℹ️ Info:</strong> Frames are captured every 2 seconds for processing.
+          Adjust attributes and confidence before starting for best results.
+          Use "Capture Snapshot" to save detections to history.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // Interactive Results Viewer Component
 function InteractiveResultsViewer({ inputImage, outputImage, statistics }) {
   const [viewMode, setViewMode] = useState('split'); // 'split', 'output', 'compare'
@@ -1101,11 +1386,22 @@ function MainPage() {
           </button>
         </div>
 
+        {/* Live Webcam Detection Section */}
+        <div>
+          <h2 className="text-xl font-bold text-gray-800 mb-4">
+            3. Live Webcam Detection (Optional)
+          </h2>
+          <WebcamDetection
+            selectedAttributes={selectedAttributes}
+            confidence={confidence}
+          />
+        </div>
+
         {/* Results Display */}
         {predictedImage && (
           <div id="results-section">
             <h2 className="text-xl font-bold text-gray-800 mb-4">
-              3. Results
+              4. Results
             </h2>
 
             {/* Export Results */}
@@ -1159,7 +1455,7 @@ function MainPage() {
 
       {/* Footer */}
       <div className="mt-8 text-center text-sm text-gray-500">
-        <p>Powered by YOLOv8 • Phase 3: Export Formats • Search History • GPU Acceleration • Production Ready</p>
+        <p>Powered by YOLOv8 • Live Webcam Detection • Export Formats • Search History • GPU Acceleration • Production Ready</p>
       </div>
     </div>
   );
